@@ -1,15 +1,23 @@
 """
-HMI2 MicroPython Library
-A MicroPython port of the Arduino/ESP HMI2 control panel library.
-Supports LAN (socket) communication with HMI control panel app.
+HMI2 Library - PC / MicroPython
+HMI2 control panel library. LAN (socket) only for PC compatibility.
+Use IP address to connect to HMI control panel app.
 """
 
 import struct
 import time
-from machine import UART
+
+# Time helpers for PC (no ticks_ms in standard Python)
+try:
+    time.ticks_ms()
+    print("[HMI2 DEBUG] time.ticks_ms available")
+except (AttributeError, TypeError):
+    time.ticks_ms = lambda: int(time.time() * 1000)
+    time.ticks_diff = lambda a, b: a - b
+    print("[HMI2 DEBUG] using fallback time.ticks_ms/ticks_diff")
+
 try:
     import socket
-    import network
     LAN_AVAILABLE = True
     print("[HMI2 DEBUG] socket imported, LAN_AVAILABLE=True")
 except ImportError:
@@ -41,16 +49,14 @@ HDMASK32 = 0xC0000000
 gmask8 = 0xFF
 gmask16 = 0xFFFF
 
-# Connection types
-HARD_SERIAL = 0
-SOFT_SERIAL = 1
+# Connection type (LAN only for PC)
 LAN = 2
 
 
 class Hmi2:
     """
-    HMI2 Control Panel Library for MicroPython.
-    Communicates via UART (hardware serial) or LAN (socket) with HMI control panel app.
+    HMI2 Control Panel Library (PC / LAN).
+    Communicates via LAN (socket) with HMI control panel app.
     Manages boolean, integer, double, and float data files with synchronization.
     Provides display/LCD functionality for text output.
     """
@@ -128,8 +134,7 @@ class Hmi2:
         self.lanTimeCount = False
         self.reconnectServer = True
         
-        # Connection objects
-        self.myHard = None
+        # Connection
         self.myLAN = None
         self.connectionType = None
         
@@ -138,7 +143,7 @@ class Hmi2:
         self.myPort = 1030
         self.myLanSlot = 1
         self.connect_timeout = 5.0  # seconds for socket.connect()
-
+        
         # Auto-update settings
         self.autoUpdateEnabled = True
         self.updateTimer = None
@@ -149,72 +154,56 @@ class Hmi2:
         self.initLCD()
         print("[HMI2 DEBUG] __init__ done")
 
-    def init(self, serial_or_ip, lan_memory_bank=None, auto_update=True, update_interval_ms=50, connect_timeout=5.0):
+    def init(self, ip_address, lan_memory_bank=None, auto_update=True, update_interval_ms=50, connect_timeout=5.0):
         """
-        Initialize HMI2 connection.
+        Initialize HMI2 connection (LAN only).
 
         Args:
-            serial_or_ip: UART object for serial, or tuple/string for IP address (LAN)
-            lan_memory_bank: Memory bank number (1-6) for LAN connection, ignored for serial
+            ip_address: IP address as string (e.g. "192.168.1.10") or tuple (192, 168, 1, 10)
+            lan_memory_bank: Memory bank number (1-6), default 1
             auto_update: Enable automatic background updates (default: True)
             update_interval_ms: Interval between automatic updates in milliseconds (default: 50)
-            connect_timeout: Socket connect timeout in seconds (default: 5.0, LAN only)
+            connect_timeout: Socket connect timeout in seconds (default: 5.0)
         """
-        print("[HMI2 DEBUG] init(serial_or_ip=%r, lan_memory_bank=%r, auto_update=%r, update_interval_ms=%r, connect_timeout=%r)" % (serial_or_ip, lan_memory_bank, auto_update, update_interval_ms, connect_timeout))
+        print("[HMI2 DEBUG] init(ip_address=%r, lan_memory_bank=%r, auto_update=%r, update_interval_ms=%r, connect_timeout=%r)" % (ip_address, lan_memory_bank, auto_update, update_interval_ms, connect_timeout))
+        if not LAN_AVAILABLE:
+            print("[HMI2 DEBUG] init: LAN not available, raising")
+            raise RuntimeError("LAN support not available. socket module required.")
 
-        if isinstance(serial_or_ip, UART):
-            # Hardware serial (UART)
-            print("[HMI2 DEBUG] init: UART mode")
-            self.initLCD()
-            self.connectionType = HARD_SERIAL
-            self.myHard = serial_or_ip
-            self.syncro = True
-            self.overrideSend = False
-            self.overDisplay = False
-        elif isinstance(serial_or_ip, (str, tuple, list)):
-            # LAN connection
-            print("[HMI2 DEBUG] init: LAN mode")
-            if not LAN_AVAILABLE:
-                print("[HMI2 DEBUG] init: LAN not available, raising")
-                raise RuntimeError("LAN support not available. socket module required.")
-
-            self.initLCD()
-
-            if isinstance(serial_or_ip, str):
-                parts = serial_or_ip.split('.')
-                self.myServer_ip = tuple(int(x) for x in parts)
-                print("[HMI2 DEBUG] init: IP from string -> %r" % (self.myServer_ip,))
-            elif isinstance(serial_or_ip, (tuple, list)):
-                self.myServer_ip = tuple(serial_or_ip)
-                print("[HMI2 DEBUG] init: IP from tuple/list -> %r" % (self.myServer_ip,))
-            else:
-                print("[HMI2 DEBUG] init: invalid IP format, raising")
-                raise ValueError("Invalid IP address format. Use string or tuple.")
-
-            self.myPort = 1030
-
-            if lan_memory_bank is None:
-                self.myLanSlot = 1
-            elif lan_memory_bank < 1:
-                self.myLanSlot = 1
-            elif lan_memory_bank > 6:
-                self.myLanSlot = 6
-            else:
-                self.myLanSlot = lan_memory_bank
-
-            self.connectionType = LAN
-            self.myLAN = None
-            self.lanConnectionStatus = False
-            self.reconnectServer = True
-            self.connect_timeout = connect_timeout
-            self.connect2Server()
-            self.syncro = True
-            self.overrideSend = False
-            self.overDisplay = False
+        self.initLCD()
+        
+        if isinstance(ip_address, str):
+            parts = ip_address.split('.')
+            self.myServer_ip = tuple(int(x) for x in parts)
+            print("[HMI2 DEBUG] init: IP from string -> %r" % (self.myServer_ip,))
+        elif isinstance(ip_address, (tuple, list)):
+            self.myServer_ip = tuple(ip_address)
+            print("[HMI2 DEBUG] init: IP from tuple/list -> %r" % (self.myServer_ip,))
         else:
-            print("[HMI2 DEBUG] init: invalid parameter type, raising")
-            raise ValueError("Invalid initialization parameter. Use UART object or IP address.")
-
+            print("[HMI2 DEBUG] init: invalid IP format, raising")
+            raise ValueError("Invalid IP address format. Use string or tuple.")
+        
+        self.myPort = 1030
+        
+        if lan_memory_bank is None:
+            self.myLanSlot = 1
+        elif lan_memory_bank < 1:
+            self.myLanSlot = 1
+        elif lan_memory_bank > 6:
+            self.myLanSlot = 6
+        else:
+            self.myLanSlot = lan_memory_bank
+        
+        self.connectionType = LAN
+        self.myLAN = None
+        self.lanConnectionStatus = False
+        self.reconnectServer = True
+        self.connect_timeout = connect_timeout
+        self.connect2Server()
+        self.syncro = True
+        self.overrideSend = False
+        self.overDisplay = False
+        
         self.autoUpdateEnabled = auto_update
         self.updateInterval = update_interval_ms
         if self.autoUpdateEnabled:
@@ -267,25 +256,25 @@ class Hmi2:
         r = self.readBFile(word, bit)
         print("[HMI2 DEBUG] getBoolean -> %r" % r)
         return r
-    
+
     def getBFileBit(self, word, bit):
         """Get boolean value from B File at word, bit position."""
         print("[HMI2 DEBUG] getBFileBit(word=%r, bit=%r)" % (word, bit))
         self._autoUpdate()
         return self.readBFile(word, bit)
-    
+
     def setBoolean(self, word, bit, value):
         """Set boolean value in B File at word, bit position."""
         print("[HMI2 DEBUG] setBoolean(word=%r, bit=%r, value=%r)" % (word, bit, value))
         self.writeBFile(word, bit, value)
         self._autoUpdate()
-    
+
     def setBFileBit(self, word, bit, value):
         """Set boolean value in B File at word, bit position."""
         print("[HMI2 DEBUG] setBFileBit(word=%r, bit=%r, value=%r)" % (word, bit, value))
         self.writeBFile(word, bit, value)
         self._autoUpdate()
-    
+
     def readBFile(self, word, bit):
         """Read boolean from B File."""
         print("[HMI2 DEBUG] readBFile(word=%r, bit=%r)" % (word, bit))
@@ -295,7 +284,7 @@ class Hmi2:
             return r
         print("[HMI2 DEBUG] readBFile -> False (out of range)")
         return False
-    
+
     def writeBFile(self, word, bit, value):
         """Write boolean to B File."""
         print("[HMI2 DEBUG] writeBFile(word=%r, bit=%r, value=%r)" % (word, bit, value))
@@ -311,25 +300,25 @@ class Hmi2:
         print("[HMI2 DEBUG] getInt(word=%r)" % word)
         self._autoUpdate()
         return self.readNFile(word)
-    
+
     def getNFile(self, word):
         """Get 16-bit unsigned integer from N File."""
         print("[HMI2 DEBUG] getNFile(word=%r)" % word)
         self._autoUpdate()
         return self.readNFile(word)
-    
+
     def setInt(self, word, value):
         """Set 16-bit unsigned integer in N File."""
         print("[HMI2 DEBUG] setInt(word=%r, value=%r)" % (word, value))
         self.writeNFile(word, value)
         self._autoUpdate()
-    
+
     def setNFile(self, word, value):
         """Set 16-bit unsigned integer in N File."""
         print("[HMI2 DEBUG] setNFile(word=%r, value=%r)" % (word, value))
         self.writeNFile(word, value)
         self._autoUpdate()
-    
+
     def readNFile(self, word):
         """Read 16-bit unsigned integer from N File."""
         print("[HMI2 DEBUG] readNFile(word=%r)" % word)
@@ -339,7 +328,7 @@ class Hmi2:
             return r
         print("[HMI2 DEBUG] readNFile -> 0 (out of range)")
         return 0
-    
+
     def writeNFile(self, word, value):
         """Write 16-bit unsigned integer to N File."""
         print("[HMI2 DEBUG] writeNFile(word=%r, value=%r)" % (word, value))
@@ -355,25 +344,25 @@ class Hmi2:
         print("[HMI2 DEBUG] getDouble(word=%r)" % word)
         self._autoUpdate()
         return self.readDFile(word)
-    
+
     def getDInt(self, word):
         """Get 32-bit unsigned integer from D File."""
         print("[HMI2 DEBUG] getDInt(word=%r)" % word)
         self._autoUpdate()
         return self.readDFile(word)
-    
+
     def setDouble(self, word, value):
         """Set 32-bit unsigned integer in D File."""
         print("[HMI2 DEBUG] setDouble(word=%r, value=%r)" % (word, value))
         self.writeDFile(word, value)
         self._autoUpdate()
-    
+
     def setDInt(self, word, value):
         """Set 32-bit unsigned integer in D File."""
         print("[HMI2 DEBUG] setDInt(word=%r, value=%r)" % (word, value))
         self.writeDFile(word, value)
         self._autoUpdate()
-    
+
     def readDFile(self, word):
         """Read 32-bit unsigned integer from D File."""
         print("[HMI2 DEBUG] readDFile(word=%r)" % word)
@@ -383,7 +372,7 @@ class Hmi2:
             return r
         print("[HMI2 DEBUG] readDFile -> 0 (out of range)")
         return 0
-    
+
     def writeDFile(self, word, value):
         """Write 32-bit unsigned integer to D File."""
         print("[HMI2 DEBUG] writeDFile(word=%r, value=%r)" % (word, value))
@@ -399,25 +388,25 @@ class Hmi2:
         print("[HMI2 DEBUG] getFloat(word=%r)" % word)
         self._autoUpdate()
         return self.readFFile(word)
-    
+
     def getFFile(self, word):
         """Get float value from F File."""
         print("[HMI2 DEBUG] getFFile(word=%r)" % word)
         self._autoUpdate()
         return self.readFFile(word)
-    
+
     def setFloat(self, word, value):
         """Set float value in F File."""
         print("[HMI2 DEBUG] setFloat(word=%r, value=%r)" % (word, value))
         self.writeFFile(word, value)
         self._autoUpdate()
-    
+
     def setFFile(self, word, value):
         """Set float value in F File."""
         print("[HMI2 DEBUG] setFFile(word=%r, value=%r)" % (word, value))
         self.writeFFile(word, value)
         self._autoUpdate()
-    
+
     def readFFile(self, word):
         """Read float from F File."""
         print("[HMI2 DEBUG] readFFile(word=%r)" % word)
@@ -427,7 +416,7 @@ class Hmi2:
             return r
         print("[HMI2 DEBUG] readFFile -> 0.0 (out of range)")
         return 0.0
-    
+
     def writeFFile(self, word, value):
         """Write float to F File."""
         print("[HMI2 DEBUG] writeFFile(word=%r, value=%r)" % (word, value))
@@ -443,7 +432,7 @@ class Hmi2:
         print("[HMI2 DEBUG] setCursor(x=%r, y=%r)" % (x, y))
         self.xCursor = x
         self.yCursor = y
-    
+
     def setDisplayID(self, lcdID):
         """Set current display ID (1-10)."""
         print("[HMI2 DEBUG] setDisplayID(lcdID=%r)" % lcdID)
@@ -460,26 +449,26 @@ class Hmi2:
         print("[HMI2 DEBUG] clearLine0()")
         for i in range(16):
             self.lineA[i] = 32  # Space
-    
+
     def clearLine1(self):
         """Clear line 1 of display."""
         print("[HMI2 DEBUG] clearLine1()")
         for i in range(16):
             self.lineB[i] = 32  # Space
-    
+
     def resetPostLines(self):
         """Reset post lines for change detection."""
         print("[HMI2 DEBUG] resetPostLines()")
         for i in range(16):
             self.lineAPost[i] = 32
             self.lineBPost[i] = 32
-    
+
     def print(self, value):
         """Print value to display at current cursor position."""
         print("[HMI2 DEBUG] print(value=%r)" % value)
         self.writeText2Line(str(value))
         self._autoUpdate()
-    
+
     def initLCD(self):
         """Initialize LCD display state."""
         print("[HMI2 DEBUG] initLCD()")
@@ -488,12 +477,12 @@ class Hmi2:
         self.xCursor = 0
         self.yCursor = 0
         self.displayID = 1
-    
+
     def writeText2Line(self, value):
         """Write text to display line."""
         print("[HMI2 DEBUG] writeText2Line(value=%r)" % value)
         okRX = False
-        
+
         if self.xCursor >= 0 and self.xCursor < 16:
             if self.yCursor == 0 or self.yCursor == 1:
                 tempSize = len(value)
@@ -523,50 +512,24 @@ class Hmi2:
         
         if okRX or self.overDisplay:
             print("[HMI2 DEBUG] writeText2Line: sending display data (okRX=%r, overDisplay=%r)" % (okRX, self.overDisplay))
-            if self.connectionType == HARD_SERIAL:
-                try:
-                    data = bytearray([64, ord('k')])
-                    for i in range(16):
-                        if self.yCursor == 0:
-                            self.fragmentData8(self.lineA[i])
-                        else:
-                            self.fragmentData8(self.lineB[i])
-                        data.append(self.md)
-                        data.append(self.ld)
-                    data.append(self.displayID)
+            if self.connectionType == LAN and self.connect2Server():
+                data = bytearray([self.myLanSlot, 64, ord('k')])
+                for i in range(16):
                     if self.yCursor == 0:
-                        data.append(49)  # '1'
+                        self.fragmentData8(self.lineA[i])
                     else:
-                        data.append(48)  # '0'
-                    data.append(98)  # 'b'
-                    self.myHard.write(data)
-                    self.checkHardResponse()
-                except Exception as e:
-                    print("[HMI2 DEBUG] writeText2Line: UART write exception %r" % e)
-
-            elif self.connectionType == LAN and self.connect2Server():
-                try:
-                    data = bytearray([self.myLanSlot, 64, ord('k')])
-                    for i in range(16):
-                        if self.yCursor == 0:
-                            self.fragmentData8(self.lineA[i])
-                        else:
-                            self.fragmentData8(self.lineB[i])
-                        data.append(self.md)
-                        data.append(self.ld)
-                    data.append(self.displayID)
-                    if self.yCursor == 0:
-                        data.append(49)
-                    else:
-                        data.append(48)
-                    data.append(98)
-                    self.myLAN.send(data)
-                    self.checkLANResponse()
-                except Exception as e:
-                    print("[HMI2 DEBUG] writeText2Line: send exception %r" % e)
-                    self.lanConnectionStatus = False
-                    self.reconnectServer = True
-
+                        self.fragmentData8(self.lineB[i])
+                    data.append(self.md)
+                    data.append(self.ld)
+                data.append(self.displayID)
+                if self.yCursor == 0:
+                    data.append(49)
+                else:
+                    data.append(48)
+                data.append(98)
+                self.myLAN.send(data)
+                self.checkLANResponse()
+    
     # Auto-update methods
     def _startAutoUpdate(self):
         """Start automatic background updates using a timer."""
@@ -578,12 +541,12 @@ class Hmi2:
             self.lastUpdateTime = time.ticks_ms()
         except Exception as ex:
             print("[HMI2 DEBUG] _startAutoUpdate exception: %r" % ex)
-    
+
     def _autoUpdate(self):
         """Automatically call update() if enough time has passed."""
         if not self.autoUpdateEnabled:
             return
-        
+
         currentTime = time.ticks_ms()
         if time.ticks_diff(currentTime, self.lastUpdateTime) >= self.updateInterval:
             self.lastUpdateTime = currentTime
@@ -592,7 +555,7 @@ class Hmi2:
                 self.update()
             except Exception as ex:
                 print("[HMI2 DEBUG] _autoUpdate: update() exception %r" % ex)
-    
+
     def enableAutoUpdate(self, enabled=True, interval_ms=50):
         """
         Enable or disable automatic updates.
@@ -606,14 +569,14 @@ class Hmi2:
         self.updateInterval = interval_ms
         if enabled:
             self._startAutoUpdate()
-    
+
     # Update and synchronization
     def update(self):
         """Update communication and synchronize data with HMI app."""
         print("[HMI2 DEBUG] update() start syncro=%r" % self.syncro)
         okData = False
         update2Android = False
-        
+
         if self.syncro:
             okData = self.sendBasicCommand('a')
             print("[HMI2 DEBUG] update: sendBasicCommand('a') -> okData=%r" % okData)
@@ -676,12 +639,12 @@ class Hmi2:
         if self.overDisplay:
             print("[HMI2 DEBUG] update: clearing overDisplay")
             self.overDisplay = False
-        
+
         if self.overrideSend:
             print("[HMI2 DEBUG] update: overrideSend, setting overDisplay and file overrides")
             self.overrideSend = False
             self.overDisplay = True
-            
+
             for i in range(self.bSize):
                 self.bFileOver[i] = -1
             
@@ -714,159 +677,59 @@ class Hmi2:
         """Send basic command to HMI."""
         print("[HMI2 DEBUG] sendBasicCommand(command=%r)" % command)
         okData = False
-
-        if self.connectionType == HARD_SERIAL:
-            try:
-                self.myHard.write(bytearray([64, ord(command), 98]))  # '@', command, 'b'
-                okData = self.checkHardResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] sendBasicCommand: UART write exception %r" % e)
-        elif self.connectionType == LAN and self.connect2Server():
-            try:
-                self.myLAN.send(bytearray([self.myLanSlot, 64, ord(command), 98]))
-                okData = self.checkLANResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] sendBasicCommand: send exception %r" % e)
-                self.lanConnectionStatus = False
-                self.reconnectServer = True
+        if self.connectionType == LAN and self.connect2Server():
+            self.myLAN.send(bytearray([self.myLanSlot, 64, ord(command), 98]))
+            okData = self.checkLANResponse()
         print("[HMI2 DEBUG] sendBasicCommand -> okData=%r" % okData)
         return okData
-    
+
     def writeBFile2(self, word, bit, value):
         """Write boolean to HMI via communication."""
         print("[HMI2 DEBUG] writeBFile2(word=%r, bit=%r, value=%r)" % (word, bit, value))
-        if self.connectionType == HARD_SERIAL:
-            try:
-                data = bytearray([64, ord('C'), word, bit])
-                data.append(49 if value else 48)  # '1' or '0'
-                data.append(98)  # 'b'
-                self.myHard.write(data)
-                self.checkHardResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeBFile2: UART write exception %r" % e)
-        elif self.connectionType == LAN and self.connect2Server():
-            try:
-                data = bytearray([self.myLanSlot, 64, ord('C'), word, bit])
-                data.append(49 if value else 48)
-                data.append(98)
-                self.myLAN.send(data)
-                self.checkLANResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeBFile2: send exception %r" % e)
-                self.lanConnectionStatus = False
-                self.reconnectServer = True
-
+        if self.connectionType == LAN and self.connect2Server():
+            data = bytearray([self.myLanSlot, 64, ord('C'), word, bit])
+            data.append(49 if value else 48)
+            data.append(98)
+            self.myLAN.send(data)
+            self.checkLANResponse()
+    
     def writeNFile2(self, word, value):
         """Write integer to HMI via communication."""
         print("[HMI2 DEBUG] writeNFile2(word=%r, value=%r)" % (word, value))
         self.fragmentData16(value)
-
-        if self.connectionType == HARD_SERIAL:
-            try:
-                self.myHard.write(bytearray([64, ord('L'), word, self.hd, self.md, self.ld, 98]))
-                self.checkHardResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeNFile2: UART write exception %r" % e)
-        elif self.connectionType == LAN and self.connect2Server():
-            try:
-                self.myLAN.send(bytearray([self.myLanSlot, 64, ord('L'), word, self.hd, self.md, self.ld, 98]))
-                self.checkLANResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeNFile2: send exception %r" % e)
-                self.lanConnectionStatus = False
-                self.reconnectServer = True
-
+        if self.connectionType == LAN and self.connect2Server():
+            self.myLAN.send(bytearray([self.myLanSlot, 64, ord('L'), word, self.hd, self.md, self.ld, 98]))
+            self.checkLANResponse()
+    
     def writeDFile2(self, word, value):
         """Write double/32-bit integer to HMI via communication."""
         print("[HMI2 DEBUG] writeDFile2(word=%r, value=%r)" % (word, value))
         self.fragmentData32(value)
-
-        if self.connectionType == HARD_SERIAL:
-            try:
-                self.myHard.write(bytearray([
-                    64, ord('N'), word, self.hd32, self.md32, self.ld32, self.hd, self.md, self.ld, 98
-                ]))
-                self.checkHardResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeDFile2: UART write exception %r" % e)
-        elif self.connectionType == LAN and self.connect2Server():
-            try:
-                self.myLAN.send(bytearray([
-                    self.myLanSlot, 64, ord('N'), word, self.hd32, self.md32, self.ld32,
-                    self.hd, self.md, self.ld, 98
-                ]))
-                self.checkLANResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeDFile2: send exception %r" % e)
-                self.lanConnectionStatus = False
-                self.reconnectServer = True
-
+        if self.connectionType == LAN and self.connect2Server():
+            self.myLAN.send(bytearray([
+                self.myLanSlot, 64, ord('N'), word, self.hd32, self.md32, self.ld32,
+                self.hd, self.md, self.ld, 98
+            ]))
+            self.checkLANResponse()
+    
     def writeFFile2(self, word, value):
         """Write float to HMI via communication."""
         print("[HMI2 DEBUG] writeFFile2(word=%r, value=%r)" % (word, value))
         self.fragmentDataFloat(value)
-
-        if self.connectionType == HARD_SERIAL:
-            try:
-                self.myHard.write(bytearray([
-                    64, ord('P'), word, self.hd32, self.md32, self.ld32, self.hd, self.md, self.ld, 98
-                ]))
-                self.checkHardResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeFFile2: UART write exception %r" % e)
-        elif self.connectionType == LAN and self.connect2Server():
-            try:
-                self.myLAN.send(bytearray([
-                    self.myLanSlot, 64, ord('P'), word, self.hd32, self.md32, self.ld32,
-                    self.hd, self.md, self.ld, 98
-                ]))
-                self.checkLANResponse()
-            except Exception as e:
-                print("[HMI2 DEBUG] writeFFile2: send exception %r" % e)
-                self.lanConnectionStatus = False
-                self.reconnectServer = True
-
-    def checkHardResponse(self):
-        """Check response from hardware serial."""
-        print("[HMI2 DEBUG] checkHardResponse() start")
-        okData = False
-        self.inCount = True
-        self.startTime = time.ticks_ms()
-
-        while self.inCount:
-            try:
-                if self.myHard.any():
-                    self.inCount = False
-                    data = self.myHard.read(128)
-                    if data:
-                        print("[HMI2 DEBUG] checkHardResponse: recv %r bytes" % len(data))
-                        idx = 0
-                        for byte in data:
-                            if idx < len(self.bufferSerial):
-                                self.bufferSerial[idx] = byte
-                                idx += 1
-                                if byte == 98:  # 'b'
-                                    break
-                        if idx > 0:
-                            okData = True
-            except Exception as ex:
-                print("[HMI2 DEBUG] checkHardResponse: read exception %r" % ex)
-
-            if (time.ticks_ms() - self.startTime) > 900:
-                print("[HMI2 DEBUG] checkHardResponse: timeout 900ms")
-                self.inCount = False
-
-        self.cleanHardSerial()
-        print("[HMI2 DEBUG] checkHardResponse -> okData=%r" % okData)
-        return okData
-
+        if self.connectionType == LAN and self.connect2Server():
+            self.myLAN.send(bytearray([
+                self.myLanSlot, 64, ord('P'), word, self.hd32, self.md32, self.ld32,
+                self.hd, self.md, self.ld, 98
+            ]))
+            self.checkLANResponse()
+    
     def checkLANResponse(self):
         """Check response from LAN connection."""
         print("[HMI2 DEBUG] checkLANResponse() start")
         okData = False
         self.inCount = True
         self.startTime = time.ticks_ms()
-        
+
         while self.inCount:
             try:
                 if self.myLAN:
@@ -894,9 +757,9 @@ class Hmi2:
                 if not self.lanTimeCount:
                     self.lanTimeCount = True
                     self.reconectTime = time.ticks_ms()
-        
+
         self.cleanLan()
-        
+
         if self.lanTimeCount:
             if (time.ticks_ms() - self.reconectTime) > 3000:
                 print("[HMI2 DEBUG] checkLANResponse: closing socket, lanConnectionStatus=False")
@@ -911,16 +774,7 @@ class Hmi2:
 
         print("[HMI2 DEBUG] checkLANResponse -> okData=%r" % okData)
         return okData
-
-    def cleanHardSerial(self):
-        """Clean hardware serial buffer."""
-        print("[HMI2 DEBUG] cleanHardSerial()")
-        try:
-            if self.myHard.any():
-                self.myHard.read(self.myHard.any())
-        except Exception as ex:
-            print("[HMI2 DEBUG] cleanHardSerial exception: %r" % ex)
-
+    
     def cleanLan(self):
         """Clean LAN buffer."""
         print("[HMI2 DEBUG] cleanLan()")
@@ -933,13 +787,13 @@ class Hmi2:
                     pass
         except Exception as ex:
             print("[HMI2 DEBUG] cleanLan exception: %r" % ex)
-    
+
     # Bit manipulation methods
     def setBitWord(self, wordPos, bitPos, value):
         """Set bit in word."""
         print("[HMI2 DEBUG] setBitWord(wordPos=%r, bitPos=%r, value=%r)" % (wordPos, bitPos, value))
         temp = self.bFile[wordPos]
-        
+
         if value:
             temp |= self.setBitToInt(bitPos)
         else:
@@ -954,14 +808,14 @@ class Hmi2:
         tempInt >>= bitPos
         tempInt &= 1
         return tempInt == 1
-    
+
     def setBitWordUpdate(self, wordPos, bitPos):
         """Set update flag for bit."""
         temp = self.bFileUpdate[wordPos]
         temp |= self.setBitToInt(bitPos)
         temp &= gmask16
         self.bFileUpdate[wordPos] = temp
-    
+
     def getBitWordUpdate(self, wordPos, bitPos):
         """Get update flag for bit."""
         tempInt = self.bFileUpdate[wordPos]
@@ -981,13 +835,13 @@ class Hmi2:
         tempInt = self.bFileOver[wordPos]
         tempInt >>= bitPos
         tempInt &= 1
-        
+
         if tempInt == 1:
             self.resetBitWordOver(wordPos, bitPos)
             return True
-        
+
         return False
-    
+
     def getNWordOver(self, wordPos):
         """Get override flag for N word."""
         temp = self.nFileOver[wordPos]
@@ -1081,7 +935,7 @@ class Hmi2:
         temp = tempLd1 | tempMd1
         temp &= gmask8
         return temp
-    
+
     def joinInt16(self, tempHd, tempMd, tempLd):
         """Join three 6-bit parts into 16-bit integer."""
         tempLd1 = tempLd
@@ -1095,7 +949,7 @@ class Hmi2:
         """Join six 6-bit parts into 32-bit integer."""
         tempB = (temp6 << 30) | (temp5 << 24) | (temp4 << 18) | (temp3 << 12) | (temp2 << 6) | temp1
         return tempB
-    
+
     def joinFloat(self, tempInt32):
         """Join 32-bit integer into float."""
         float_bytes = struct.pack('>I', tempInt32)
