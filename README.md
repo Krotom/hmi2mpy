@@ -1,6 +1,6 @@
 # HMI2 MicroPython Library
 
-A MicroPython port of the Arduino/ESP HMI2 control panel library. This library provides communication with HMI control panel applications via serial (UART) or LAN (socket) connections.
+A MicroPython port of the Arduino/ESP HMI Control Panel library. This library provides communication with HMI Control Panel applications via serial (UART) or LAN (socket) connections.
 
 ## Features
 
