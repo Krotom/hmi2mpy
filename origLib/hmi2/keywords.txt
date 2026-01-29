@@ -1,0 +1,26 @@
+# Syntax Coloring Map For HMI2
+
+# Methods and Functions
+init KEYWORD2
+update KEYWORD2
+getBoolean KEYWORD2
+getBFileBit KEYWORD2
+setBoolean KEYWORD2
+setBFileBit KEYWORD2
+getInt KEYWORD2
+getNFile KEYWORD2
+setInt KEYWORD2
+setNFile KEYWORD2
+getDouble KEYWORD2
+getDInt KEYWORD2
+setDouble KEYWORD2
+setDInt KEYWORD2
+getFloat KEYWORD2
+getFFile KEYWORD2
+setFloat KEYWORD2
+setFFile KEYWORD2
+setDisplayID KEYWORD2
+setCursor KEYWORD2
+clearLine0 KEYWORD2
+clearLine1 KEYWORD2
+print KEYWORD2
