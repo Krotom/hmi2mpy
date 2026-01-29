@@ -2,6 +2,8 @@
 
 A MicroPython port of the Arduino/ESP HMI Control Panel library. This library provides communication with HMI Control Panel applications via serial (UART) or LAN (socket) connections.
 
+For reference, the `origLib` directory contains the original C++ library
+
 ## Features
 
 - **Boolean Data (B File)**: Read/write boolean values stored as bits in 16-bit words
